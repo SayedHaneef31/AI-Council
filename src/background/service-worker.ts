@@ -12,9 +12,50 @@ interface RunSession {
 
 let activeRun: RunSession | null = null;
 
+// Enable opening Side Panel directly on toolbar icon click
+chrome.runtime.onInstalled.addListener(() => {
+  if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function') {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
+      console.error('Failed to set side panel behavior:', err);
+    });
+  }
+});
+
+// Also configure behavior on startup
+if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function') {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+}
+
 async function findProviderTab(urlPattern: string): Promise<chrome.tabs.Tab | null> {
   const tabs = await chrome.tabs.query({ url: urlPattern });
   return tabs.length > 0 ? tabs[0] : null;
+}
+
+async function ensureContentScriptInjected(tabId: number, provider: ProviderId): Promise<boolean> {
+  try {
+    const isResponding = await new Promise<boolean>((resolve) => {
+      chrome.tabs.sendMessage(tabId, { type: 'CHECK_PROVIDER_STATUS', provider }, (res) => {
+        if (chrome.runtime.lastError || !res) {
+          resolve(false);
+        } else {
+          resolve(true);
+        }
+      });
+    });
+
+    if (!isResponding) {
+      console.log(`[AI Council] Content script missing on ${provider} tab (${tabId}). Injecting dynamically...`);
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: [`content/${provider}.js`],
+      });
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return true;
+  } catch (err) {
+    console.error(`Failed to ensure content script on ${provider}:`, err);
+    return false;
+  }
 }
 
 async function getProviderStatuses(): Promise<Record<ProviderId, { status: ProviderStatus; tabId?: number }>> {
@@ -34,6 +75,7 @@ async function getProviderStatuses(): Promise<Record<ProviderId, { status: Provi
   for (const p of providers) {
     const tab = await findProviderTab(patterns[p]);
     if (tab && tab.id) {
+      await ensureContentScriptInjected(tab.id, p);
       results[p] = { status: 'ready', tabId: tab.id };
     }
   }
@@ -47,6 +89,8 @@ async function runWorkerProvider(
   prompt: string,
   timeoutMs: number = 90000
 ): Promise<ModelResponse> {
+  await ensureContentScriptInjected(tabId, provider);
+
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`${provider} timed out after ${timeoutMs / 1000}s`));

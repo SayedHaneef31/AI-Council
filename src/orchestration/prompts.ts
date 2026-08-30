@@ -10,7 +10,7 @@ export function buildSynthesisPrompt(
     .join('\n\n');
 
   return `You are acting as the AI Council Orchestrator and Synthesizer.
-Your goal is to cross-examine and synthesize answers from multiple AI models into ONE clear, transparent recommendation.
+Your task is to cross-examine and synthesize answers from the participating AI models into ONE clear, transparent decision recommendation.
 
 ORIGINAL USER QUESTION:
 ${question}
@@ -18,18 +18,18 @@ ${question}
 ${userContext ? `ADDITIONAL USER CONTEXT:\n${userContext}\n` : ''}
 ${modelTextBlocks}
 
-TASK & FORMAT INSTRUCTIONS:
-Analyze the model responses above. Produce a response adhering strictly to the following sections:
+IMPORTANT FORMAT REQUIREMENT:
+Your response MUST use the exact markdown headers below (with ##):
 
 ## VERDICT
 [Provide the single concise recommendation or conclusion here.]
 
 ## CONSENSUS
-- [Key point 1 of agreement across models]
-- [Key point 2 of agreement across models]
+- [Key point of agreement 1]
+- [Key point of agreement 2]
 
 ## DISAGREEMENT
-- [Key disagreement or divergence in priority/reasoning]
+- [Key disagreement or divergence in priority/reasoning 1]
 
 ## WHY
 - [Reason 1 supporting the recommendation]
