@@ -1,0 +1,52 @@
+import { ClaudeAdapter } from './adapter';
+import { ExtensionMessage } from '../../messaging/message-types';
+
+const adapter = new ClaudeAdapter();
+
+chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
+  if (!('provider' in message) || message.provider !== 'claude') return false;
+
+  (async () => {
+    try {
+      switch (message.type) {
+        case 'CHECK_PROVIDER_STATUS': {
+          const status = await adapter.getStatus();
+          sendResponse({ type: 'PROVIDER_STATUS_RESPONSE', provider: 'claude', status });
+          break;
+        }
+
+        case 'SUBMIT_PROMPT': {
+          await adapter.sendPrompt(message.prompt);
+          sendResponse({ type: 'PROMPT_SUBMITTED', provider: 'claude', success: true });
+          
+          try {
+            await adapter.waitForCompletion({ timeoutMs: message.timeoutMs || 90000 });
+            const response = await adapter.getLatestResponse();
+            chrome.runtime.sendMessage({
+              type: 'PROVIDER_RESPONSE',
+              provider: 'claude',
+              response,
+            });
+          } catch (err: any) {
+            chrome.runtime.sendMessage({
+              type: 'PROVIDER_ERROR',
+              provider: 'claude',
+              error: err.message || 'Claude failed during generation',
+            });
+          }
+          break;
+        }
+
+        case 'GET_LATEST_RESPONSE': {
+          const response = await adapter.getLatestResponse();
+          sendResponse({ type: 'PROVIDER_RESPONSE', provider: 'claude', response });
+          break;
+        }
+      }
+    } catch (err: any) {
+      sendResponse({ type: 'PROVIDER_ERROR', provider: 'claude', error: err.message });
+    }
+  })();
+
+  return true;
+});
