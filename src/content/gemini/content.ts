@@ -20,7 +20,16 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
           sendResponse({ type: 'PROMPT_SUBMITTED', provider: 'gemini', success: true });
           
           try {
-            await adapter.waitForCompletion({ timeoutMs: message.timeoutMs || 90000 });
+            await adapter.waitForCompletion({
+              timeoutMs: message.timeoutMs || 120000,
+              onProgress: (text: string) => {
+                chrome.runtime.sendMessage({
+                  type: 'PROVIDER_STREAM_UPDATE',
+                  provider: 'gemini',
+                  text,
+                }).catch(() => {});
+              },
+            });
             const response = await adapter.getLatestResponse();
             chrome.runtime.sendMessage({
               type: 'PROVIDER_RESPONSE',

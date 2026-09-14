@@ -36,4 +36,38 @@ describe('Council Store', () => {
     expect(state.providers.chatgpt.status).toBe('completed');
     expect(state.providers.chatgpt.response?.text).toBe('Test response');
   });
+
+  it('should manage conversation turns and support continuous chat', () => {
+    const turnId1 = useCouncilStore.getState().startTurn('Question 1', 'Context 1');
+    expect(useCouncilStore.getState().turns.length).toBe(1);
+    expect(useCouncilStore.getState().turns[0].id).toBe(turnId1);
+    expect(useCouncilStore.getState().turns[0].userPrompt).toBe('Question 1');
+    expect(useCouncilStore.getState().runStatus).toBe('running');
+
+    // Simulate completion of turn 1
+    useCouncilStore.getState().updateFromPartialState({
+      runStatus: 'completed',
+      synthesis: {
+        consolidatedAnswer: 'Consolidated answer 1',
+        verdict: 'Verdict 1',
+        consensus: ['Point 1'],
+        disagreements: [],
+        why: ['Reason 1'],
+        rawMarkdown: 'raw',
+      },
+    });
+
+    expect(useCouncilStore.getState().turns[0].synthesis?.consolidatedAnswer).toBe('Consolidated answer 1');
+
+    // Start turn 2 (follow-up question)
+    const turnId2 = useCouncilStore.getState().startTurn('Question 2');
+    expect(useCouncilStore.getState().turns.length).toBe(2);
+    expect(useCouncilStore.getState().turns[1].id).toBe(turnId2);
+    expect(useCouncilStore.getState().turns[0].synthesis?.consolidatedAnswer).toBe('Consolidated answer 1');
+
+    // Clear chat
+    useCouncilStore.getState().clearChat();
+    expect(useCouncilStore.getState().turns.length).toBe(0);
+    expect(useCouncilStore.getState().runStatus).toBe('idle');
+  });
 });

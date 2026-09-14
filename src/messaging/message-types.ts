@@ -7,6 +7,9 @@ export type ExtensionMessage =
   | { type: 'PROMPT_SUBMITTED'; provider: ProviderId; success: boolean; error?: string }
   | { type: 'GET_LATEST_RESPONSE'; provider: ProviderId }
   | { type: 'PROVIDER_RESPONSE'; provider: ProviderId; response: ModelResponse }
+  | { type: 'PROVIDER_STREAM_UPDATE'; provider: ProviderId; text: string }
   | { type: 'PROVIDER_ERROR'; provider: ProviderId; error: string }
   | { type: 'START_COUNCIL_RUN'; prompt: string; context?: string }
+  | { type: 'OPEN_PROVIDER_TABS'; forceNewChat?: boolean }
+  | { type: 'INIT_EXTENSION_SESSION' }
   | { type: 'COUNCIL_STATE_UPDATE'; state: any };

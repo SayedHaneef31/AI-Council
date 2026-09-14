@@ -2,6 +2,7 @@ export type ProviderId = 'chatgpt' | 'claude' | 'gemini';
 
 export type ProviderStatus =
   | 'unavailable'
+  | 'connecting'
   | 'ready'
   | 'sending'
   | 'generating'
@@ -19,6 +20,7 @@ export interface ModelResponse {
 }
 
 export interface CouncilSynthesis {
+  consolidatedAnswer: string;
   verdict: string;
   consensus: string[];
   disagreements: string[];
@@ -38,11 +40,26 @@ export interface ProviderRunState {
 
 export type RunStatus = 'idle' | 'running' | 'synthesizing' | 'completed' | 'failed';
 
+export interface ConversationTurn {
+  id: string;
+  userPrompt: string;
+  userContext?: string;
+  runStatus: RunStatus;
+  synthesis: CouncilSynthesis | null;
+  modelResponses: Partial<Record<ProviderId, ModelResponse>>;
+  streamingResponses?: Partial<Record<ProviderId, string>>;
+  error: string | null;
+  createdAt: number;
+}
+
 export interface CouncilState {
   prompt: string;
   context: string;
   runStatus: RunStatus;
   providers: Record<ProviderId, ProviderRunState>;
+  streamingResponses?: Partial<Record<ProviderId, string>>;
   synthesis: CouncilSynthesis | null;
   error: string | null;
+  turns: ConversationTurn[];
+  activeTurnId: string | null;
 }

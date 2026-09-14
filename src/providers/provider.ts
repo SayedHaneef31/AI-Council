@@ -3,6 +3,7 @@ import { ProviderId, ProviderStatus, ModelResponse } from '../types';
 export interface WaitOptions {
   timeoutMs?: number;
   pollIntervalMs?: number;
+  onProgress?: (text: string) => void;
 }
 
 export interface AIProvider {

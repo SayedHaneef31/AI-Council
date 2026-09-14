@@ -5,26 +5,22 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+      },
       colors: {
-        slate: {
-          950: '#090d16',
-          900: '#0f172a',
-          850: '#151e32',
-          800: '#1e293b',
-          700: '#334155',
-          600: '#475569',
-        },
-        emerald: {
-          400: '#34d399',
+        brand: {
+          50: '#ecfdf5',
+          100: '#d1fae5',
+          200: '#a7f3d0',
           500: '#10b981',
-          950: '#022c22',
+          600: '#059669',
+          700: '#047857',
+          800: '#065f46',
+          900: '#064e3b',
         },
-        sky: {
-          400: '#38bdf8',
-          500: '#0ea5e9',
-        }
-      }
+      },
     },
   },
   plugins: [],
-}
+};

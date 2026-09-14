@@ -33,10 +33,14 @@ describe('Synthesis Module', () => {
     expect(prompt).toContain('CHATGPT RESPONSE');
     expect(prompt).toContain('CLAUDE RESPONSE');
     expect(prompt).toContain('Yonex Arc 11 Play');
+    expect(prompt).toContain('## CONSOLIDATED_RESPONSE');
   });
 
-  it('should parse markdown synthesis correctly', () => {
+  it('should parse markdown synthesis with consolidated response correctly', () => {
     const rawMarkdown = `
+## CONSOLIDATED_RESPONSE
+Both models recommend the Yonex Arcsaber 11 Play for intermediate doubles players looking for control under ₹10,000 [ChatGPT, Claude]. ChatGPT highlights its forgiving even-balance frame [ChatGPT], while Claude points out that if you want aggressive rear-court smashing power, the Astrox series might be considered [Claude]. Overall, the Arc 11 Play is the ideal balance.
+
 ## VERDICT
 Arc 11 Play is the optimal choice for your intermediate doubles control requirement.
 
@@ -57,6 +61,8 @@ Arc 11 Play is the optimal choice for your intermediate doubles control requirem
 
     const parsed = parseSynthesisMarkdown(rawMarkdown);
 
+    expect(parsed.consolidatedAnswer).toContain('Both models recommend the Yonex Arcsaber 11 Play');
+    expect(parsed.consolidatedAnswer).toContain('[ChatGPT, Claude]');
     expect(parsed.verdict).toContain('Arc 11 Play is the optimal choice');
     expect(parsed.consensus.length).toBe(2);
     expect(parsed.consensus[0]).toContain('Both models consider Arc 11 Play');
@@ -64,5 +70,19 @@ Arc 11 Play is the optimal choice for your intermediate doubles control requirem
     expect(parsed.disagreements[0]).toContain('Claude notes');
     expect(parsed.why.length).toBe(2);
     expect(parsed.confidence).toContain('85%');
+  });
+
+  it('should fallback gracefully if consolidated response header is omitted', () => {
+    const rawMarkdown = `
+## VERDICT
+Arc 11 Play is the optimal choice.
+
+## CONSENSUS
+- High control and value.
+`;
+
+    const parsed = parseSynthesisMarkdown(rawMarkdown);
+    expect(parsed.consolidatedAnswer).toContain('Arc 11 Play is the optimal choice');
+    expect(parsed.verdict).toContain('Arc 11 Play is the optimal choice');
   });
 });

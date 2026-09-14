@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "description": "Multi-model AI Orchestration & Reasoning Decision Layer",
   "permissions": [
-    "sidePanel",
     "tabs",
     "scripting",
     "storage",
@@ -24,11 +23,8 @@
     "service_worker": "background/service-worker.js",
     "type": "module"
   },
-  "side_panel": {
-    "default_path": "sidepanel/index.html"
-  },
   "action": {
-    "default_title": "AI Council",
+    "default_title": "Open AI Council Workspace",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
