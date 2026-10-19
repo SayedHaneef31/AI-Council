@@ -6,9 +6,17 @@ export type ProviderStatus =
   | 'ready'
   | 'sending'
   | 'generating'
+  | 'awaiting_input'
   | 'completed'
   | 'failed'
   | 'timed_out';
+
+export interface ProviderQuestion {
+  provider: ProviderId;
+  question: string;
+  options?: string[];
+  timestamp: number;
+}
 
 export interface ModelResponse {
   provider: ProviderId;
@@ -33,9 +41,11 @@ export interface ProviderRunState {
   id: ProviderId;
   name: string;
   status: ProviderStatus;
+  isFresh?: boolean;
   error?: string;
   response?: ModelResponse;
   tabId?: number;
+  pendingQuestion?: ProviderQuestion;
 }
 
 export type RunStatus = 'idle' | 'running' | 'synthesizing' | 'completed' | 'failed';
@@ -48,6 +58,7 @@ export interface ConversationTurn {
   synthesis: CouncilSynthesis | null;
   modelResponses: Partial<Record<ProviderId, ModelResponse>>;
   streamingResponses?: Partial<Record<ProviderId, string>>;
+  pendingQuestions?: Partial<Record<ProviderId, ProviderQuestion>>;
   error: string | null;
   createdAt: number;
 }

@@ -104,26 +104,78 @@ function extractStructuredMarkdown(root: HTMLElement): string {
 }
 
 async function insertTextIntoInput(input: HTMLElement, text: string): Promise<void> {
+  // 1. Spoof visibility and window focus inside MAIN world
+  try {
+    const s = document.createElement('script');
+    s.textContent = `
+      try {
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        document.hasFocus = () => true;
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.dispatchEvent(new Event('focus'));
+      } catch (e) {}
+    `;
+    (document.head || document.documentElement).appendChild(s);
+    s.remove();
+  } catch (_e) {}
+
+  try {
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('focus'));
+  } catch (_e) {}
+
   input.focus();
 
   if (input.tagName.toLowerCase() === 'textarea') {
     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
     nativeSetter?.call(input, text);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
     return;
   }
 
-  // Gemini uses rich-textarea div[contenteditable="true"] with inner <p>
+  // 2. Select contents and try native execCommand
+  try {
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    document.execCommand('delete', false);
+    document.execCommand('insertText', false, text);
+  } catch (_e) {}
+
+  // 3. Try ClipboardEvent paste
+  try {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', text);
+    const pasteEv = new ClipboardEvent('paste', {
+      clipboardData: dt,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    input.dispatchEvent(pasteEv);
+  } catch (_e) {}
+
+  // 4. Format paragraph inside contenteditable
   let p = input.querySelector('p');
   if (!p) {
     p = document.createElement('p');
-    input.innerHTML = '';
     input.appendChild(p);
   }
-  p.textContent = text;
+  p.innerHTML = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
 
-  // Dispatch InputEvents that ProseMirror / Angular listens for
+  // 5. Custom element rich-textarea binding
+  const rta = input.closest('rich-textarea') || document.querySelector('rich-textarea');
+  if (rta) {
+    try {
+      (rta as any).value = text;
+    } catch (_e) {}
+  }
+
+  // 6. Dispatch composed events
   const inputEventInit: InputEventInit = {
     bubbles: true,
     cancelable: true,
@@ -136,21 +188,18 @@ async function insertTextIntoInput(input: HTMLElement, text: string): Promise<vo
     input.dispatchEvent(new InputEvent('beforeinput', inputEventInit));
     input.dispatchEvent(new InputEvent('input', inputEventInit));
   } catch (_e) {
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
   }
 
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-  input.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true }));
+  p.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
 
-  // Set selection range to end of text
-  try {
-    const range = document.createRange();
-    range.selectNodeContents(p);
-    range.collapse(false);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-  } catch (_e) {}
+  if (rta) {
+    rta.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    rta.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    rta.dispatchEvent(new CustomEvent('input', { bubbles: true, composed: true, detail: { value: text } }));
+  }
+
+  input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 }
 
 export class GeminiAdapter implements AIProvider {
@@ -173,39 +222,70 @@ export class GeminiAdapter implements AIProvider {
   }
 
   async sendPrompt(prompt: string): Promise<void> {
-    const input = document.querySelector(GeminiSelectors.input) as HTMLElement | null;
+    const rta = document.querySelector('rich-textarea');
+    const input =
+      (rta?.shadowRoot?.querySelector('[contenteditable="true"]') as HTMLElement) ||
+      (document.querySelector(GeminiSelectors.input) as HTMLElement | null);
+
     if (!input) {
       throw new Error('Gemini input element not found');
     }
 
+    // Baseline response count before submission
+    const initialResponses = Array.from(document.querySelectorAll('model-response')) as HTMLElement[];
+    const initialCount = initialResponses.length;
+
     await insertTextIntoInput(input, prompt);
+    await new Promise((r) => setTimeout(r, 250));
 
-    // Wait for Gemini's Angular controller to activate the send button
-    let sendBtn: HTMLElement | null = null;
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 100));
-      sendBtn = document.querySelector(GeminiSelectors.sendButton) as HTMLElement | null;
-      if (sendBtn) {
-        const isAriaDisabled = sendBtn.getAttribute('aria-disabled') === 'true';
-        const isDisabled = sendBtn.hasAttribute('disabled');
-        if (!isAriaDisabled && !isDisabled) {
-          break; // Send button is active!
-        }
+    // Active submission retry loop:
+    // Repeatedly trigger send button & Enter key until Gemini actually starts generating
+    const startTime = Date.now();
+    const maxAttemptDuration = 18000; // 18 seconds retry window
+
+    while (Date.now() - startTime < maxAttemptDuration) {
+      // If Gemini has started generating or a new response node appeared, prompt successfully submitted!
+      if (GeminiDetector.isGenerating() || document.querySelectorAll('model-response').length > initialCount) {
+        return;
       }
-      // Re-trigger input event if still not enabled
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    }
 
-    const isAriaDisabled = sendBtn?.getAttribute('aria-disabled') === 'true';
-    const isDisabled = sendBtn?.hasAttribute('disabled');
+      // Find the send button (in shadow DOM, in light DOM, or broad search)
+      let sendBtn: HTMLElement | null =
+        (rta?.shadowRoot?.querySelector('button[aria-label*="Send" i], button.send-button, .send-button-container button') as HTMLElement) ||
+        (document.querySelector(GeminiSelectors.sendButton) as HTMLElement | null);
 
-    if (sendBtn && !isAriaDisabled && !isDisabled) {
-      sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
-      sendBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
-      sendBtn.click();
-    } else {
-      // Fallback: Dispatch Enter key event directly to the input
-      const enterEvent = new KeyboardEvent('keydown', {
+      if (!sendBtn) {
+        const allButtons = Array.from(document.querySelectorAll('button')) as HTMLButtonElement[];
+        sendBtn = allButtons.find((b) => {
+          const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+          return aria.includes('send') || aria.includes('submit');
+        }) || null;
+      }
+
+      // Re-trigger input events on input and rich-textarea
+      input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      if (rta) {
+        rta.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      }
+
+      if (sendBtn) {
+        sendBtn.removeAttribute('aria-disabled');
+        sendBtn.setAttribute('aria-disabled', 'false');
+        sendBtn.removeAttribute('disabled');
+        (sendBtn as HTMLButtonElement).disabled = false;
+
+        const mouseOpts: MouseEventInit = { bubbles: true, cancelable: true, composed: true, view: window };
+        try {
+          sendBtn.dispatchEvent(new PointerEvent('pointerdown', mouseOpts));
+          sendBtn.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+          sendBtn.dispatchEvent(new PointerEvent('pointerup', mouseOpts));
+          sendBtn.dispatchEvent(new MouseEvent('mouseup', mouseOpts));
+        } catch (_e) {}
+        sendBtn.click();
+      }
+
+      // Dispatch Enter key events directly to input
+      const enterOpts: KeyboardEventInit = {
         key: 'Enter',
         code: 'Enter',
         keyCode: 13,
@@ -213,11 +293,12 @@ export class GeminiAdapter implements AIProvider {
         bubbles: true,
         cancelable: true,
         composed: true,
-      });
-      input.dispatchEvent(enterEvent);
-      if (sendBtn) {
-        sendBtn.click();
-      }
+      };
+      input.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+      input.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
+      input.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
+
+      await new Promise((r) => setTimeout(r, 350));
     }
   }
 
@@ -226,36 +307,58 @@ export class GeminiAdapter implements AIProvider {
     const pollInterval = options?.pollIntervalMs || 250;
     const startTime = Date.now();
 
+    // Baseline: track how many responses already existed in the chat prior to sending
+    const initialResponses = Array.from(document.querySelectorAll('model-response')) as HTMLElement[];
+    const initialCount = initialResponses.length;
+    const initialLatestText = initialCount > 0
+      ? (extractStructuredMarkdown(initialResponses[initialCount - 1]) || initialResponses[initialCount - 1].innerText || '').trim()
+      : '';
+
     let lastText = '';
     let lastStreamedText = '';
     let stableCount = 0;
+    let hasStarted = false;
     let observer: MutationObserver | null = null;
 
     return new Promise((resolve, reject) => {
       const checkProgress = () => {
         const isGenerating = GeminiDetector.isGenerating();
 
-        const elements = document.querySelectorAll(
-          'model-response, message-content, div.model-response-text, div.response-container-content, [data-test-id="model-response"], .response-content, .markdown'
-        );
-
+        const modelResponses = Array.from(document.querySelectorAll('model-response')) as HTMLElement[];
         let currentText = '';
-        if (elements && elements.length > 0) {
-          const latest = elements[elements.length - 1] as HTMLElement;
+
+        if (modelResponses.length > 0) {
+          const latest = modelResponses[modelResponses.length - 1];
           currentText = extractStructuredMarkdown(latest) || (latest.innerText || latest.textContent || '').trim();
+        } else {
+          const fallbackElements = document.querySelectorAll(
+            'message-content, div.model-response-text, div.response-container-content, .response-content'
+          );
+          if (fallbackElements.length > 0) {
+            const latest = fallbackElements[fallbackElements.length - 1] as HTMLElement;
+            currentText = extractStructuredMarkdown(latest) || (latest.innerText || latest.textContent || '').trim();
+          }
+        }
+
+        // Has generation started for this new turn?
+        const isNewNode = modelResponses.length > initialCount;
+        const isTextChanged = currentText.length > 20 && currentText !== initialLatestText;
+        if (isGenerating || isNewNode || isTextChanged) {
+          hasStarted = true;
         }
 
         // Stream real-time progress if new text is generated
-        if (currentText && currentText !== lastStreamedText && options?.onProgress) {
+        if (hasStarted && currentText && (isNewNode || isTextChanged) && currentText !== lastStreamedText && options?.onProgress) {
           lastStreamedText = currentText;
           options.onProgress(currentText);
         }
 
-        if (currentText.length > 20 && !isGenerating) {
+        // Only declare completion when generation has actually started, belongs to new turn, is not generating, and content is stable
+        if (hasStarted && (isNewNode || isTextChanged) && currentText.length > 30 && !isGenerating) {
           if (currentText === lastText) {
             stableCount++;
-            // 4 consecutive stable checks = 1 second without new tokens
-            if (stableCount >= 4) {
+            // 6 consecutive checks (1.5 seconds) of stability
+            if (stableCount >= 6) {
               cleanup();
               resolve();
             }
@@ -267,7 +370,7 @@ export class GeminiAdapter implements AIProvider {
 
         if (Date.now() - startTime > timeoutMs) {
           cleanup();
-          if (currentText.length > 20) {
+          if (hasStarted && (isNewNode || isTextChanged) && currentText.length > 30) {
             resolve();
           } else {
             reject(new Error('Gemini generation timed out'));
@@ -285,30 +388,33 @@ export class GeminiAdapter implements AIProvider {
 
       const interval = setInterval(checkProgress, pollInterval);
 
-      // MutationObserver runs even in background tabs without Chrome timer throttling
       try {
         observer = new MutationObserver(() => {
           checkProgress();
         });
         observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-      } catch (_e) {
-        // Fallback to interval only
-      }
+      } catch (_e) {}
     });
   }
 
   async getLatestResponse(): Promise<ModelResponse> {
-    const selectorList = [
-      'model-response',
-      'message-content',
-      'div.model-response-text',
-      'div.response-container-content',
-      '[data-test-id="model-response"]',
-      '.response-content',
-      '.markdown',
-    ];
+    const modelResponses = Array.from(document.querySelectorAll('model-response')) as HTMLElement[];
+    if (modelResponses.length > 0) {
+      const latest = modelResponses[modelResponses.length - 1];
+      const text = extractStructuredMarkdown(latest) || (latest.innerText || latest.textContent || '').trim();
+      if (text.length > 0) {
+        return {
+          provider: 'gemini',
+          text,
+          status: 'completed',
+          startedAt: Date.now() - 5000,
+          completedAt: Date.now(),
+        };
+      }
+    }
 
-    for (const selector of selectorList) {
+    const fallbackList = ['message-content', 'div.model-response-text', 'div.response-container-content', '.response-content'];
+    for (const selector of fallbackList) {
       const messages = document.querySelectorAll(selector);
       if (messages && messages.length > 0) {
         const latest = messages[messages.length - 1] as HTMLElement;
@@ -328,3 +434,4 @@ export class GeminiAdapter implements AIProvider {
     throw new Error('No assistant response found in Gemini DOM');
   }
 }
+

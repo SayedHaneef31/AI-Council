@@ -46,6 +46,14 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
           break;
         }
 
+        case 'ANSWER_PROVIDER_QUESTION': {
+          if (adapter.answerQuestion) {
+            await adapter.answerQuestion(message.answer, message.optionIndex);
+            sendResponse({ type: 'PROVIDER_QUESTION_ANSWERED', provider: 'claude', success: true });
+          }
+          break;
+        }
+
         case 'GET_LATEST_RESPONSE': {
           const response = await adapter.getLatestResponse();
           sendResponse({ type: 'PROVIDER_RESPONSE', provider: 'claude', response });

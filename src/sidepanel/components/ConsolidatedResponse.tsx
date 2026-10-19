@@ -109,6 +109,29 @@ export const ConsolidatedResponse: React.FC<Props> = ({ synthesis, onSelectProvi
     const elements: React.ReactNode[] = [];
     let currentBulletList: string[] = [];
     let currentTableLines: string[] = [];
+    let currentCodeLines: string[] = [];
+    let inCodeBlock = false;
+    let codeLanguage = '';
+
+    const flushCodeBlock = (keyPrefix: number) => {
+      if (currentCodeLines.length > 0) {
+        elements.push(
+          <div key={`code-${keyPrefix}`} className="my-4 rounded-xl overflow-hidden border border-slate-700 bg-slate-900 text-slate-100 shadow-sm">
+            {codeLanguage && (
+              <div className="px-4 py-1.5 bg-slate-800 text-[11px] font-mono text-slate-300 border-b border-slate-700 uppercase tracking-wider">
+                {codeLanguage}
+              </div>
+            )}
+            <pre className="p-4 text-xs md:text-sm font-mono overflow-x-auto leading-relaxed text-slate-100">
+              <code>{currentCodeLines.join('\n')}</code>
+            </pre>
+          </div>
+        );
+        currentCodeLines = [];
+        inCodeBlock = false;
+        codeLanguage = '';
+      }
+    };
 
     const flushList = (keyPrefix: number) => {
       if (currentBulletList.length > 0) {
@@ -172,6 +195,25 @@ export const ConsolidatedResponse: React.FC<Props> = ({ synthesis, onSelectProvi
 
     lines.forEach((line, index) => {
       const trimmed = line.trim();
+
+      // Check for code fence
+      if (trimmed.startsWith('```')) {
+        if (inCodeBlock) {
+          flushCodeBlock(index);
+          return;
+        } else {
+          flushList(index);
+          flushTable(index);
+          inCodeBlock = true;
+          codeLanguage = trimmed.slice(3).trim();
+          return;
+        }
+      }
+
+      if (inCodeBlock) {
+        currentCodeLines.push(line);
+        return;
+      }
 
       if (!trimmed) {
         flushList(index);
@@ -292,6 +334,7 @@ export const ConsolidatedResponse: React.FC<Props> = ({ synthesis, onSelectProvi
       );
     });
 
+    flushCodeBlock(lines.length);
     flushList(lines.length);
     flushTable(lines.length);
     return elements;
@@ -376,25 +419,30 @@ export const ConsolidatedResponse: React.FC<Props> = ({ synthesis, onSelectProvi
         </div>
       </div>
 
-      {/* Main Structured Body */}
-      <div className="space-y-3 font-sans text-slate-700">
-        {renderContent(synthesis.consolidatedAnswer || synthesis.verdict)}
-      </div>
-
-      {/* Expandable Full Structured Council Report */}
+      {/* Expandable Full Structured Council Report - Placed directly at the top below header */}
       {showStructuredVerdict && (
-        <div className="pt-6 border-t border-slate-200 animate-fadeIn">
-          <div className="mb-4 flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-              Structured Executive Breakdown
+        <div className="p-5 bg-slate-50/90 rounded-2xl border border-emerald-200/80 animate-fadeIn space-y-3 shadow-xs">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+            <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+              <BarChart3 className="w-4 h-4 text-emerald-600" />
+              Structured Executive Verdict &amp; Breakdown
             </span>
-            <span className="text-xs text-slate-500">
-              Executive verdict, consensus points, divergences &amp; decision factors
-            </span>
+            <button
+              type="button"
+              onClick={() => setShowStructuredVerdict(false)}
+              className="text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+            >
+              ✕ Close
+            </button>
           </div>
           <CouncilVerdict synthesis={synthesis} />
         </div>
       )}
+
+      {/* Main Structured Body */}
+      <div className="space-y-3 font-sans text-slate-700">
+        {renderContent(synthesis.consolidatedAnswer || synthesis.verdict)}
+      </div>
     </div>
   );
 };

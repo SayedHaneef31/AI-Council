@@ -29,11 +29,30 @@ export const App: React.FC = () => {
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       chrome.runtime.sendMessage({ type: 'CHECK_PROVIDER_STATUS' }, (response) => {
         if (response && response.statuses) {
+          const currentStore = useCouncilStore.getState();
           updateFromPartialState({
             providers: {
-              chatgpt: { ...providers.chatgpt, status: response.statuses.chatgpt.status },
-              claude: { ...providers.claude, status: response.statuses.claude.status },
-              gemini: { ...providers.gemini, status: response.statuses.gemini.status },
+              chatgpt: {
+                ...currentStore.providers.chatgpt,
+                status: currentStore.providers.chatgpt.pendingQuestion || currentStore.providers.chatgpt.status === 'awaiting_input'
+                  ? 'awaiting_input'
+                  : response.statuses.chatgpt.status,
+                isFresh: response.statuses.chatgpt.isFresh,
+              },
+              claude: {
+                ...currentStore.providers.claude,
+                status: currentStore.providers.claude.pendingQuestion || currentStore.providers.claude.status === 'awaiting_input'
+                  ? 'awaiting_input'
+                  : response.statuses.claude.status,
+                isFresh: response.statuses.claude.isFresh,
+              },
+              gemini: {
+                ...currentStore.providers.gemini,
+                status: currentStore.providers.gemini.pendingQuestion || currentStore.providers.gemini.status === 'awaiting_input'
+                  ? 'awaiting_input'
+                  : response.statuses.gemini.status,
+                isFresh: response.statuses.gemini.isFresh,
+              },
             },
           });
         }
@@ -57,9 +76,9 @@ export const App: React.FC = () => {
         } else if (msg.type === 'PROVIDER_STATUS_RESPONSE' && msg.statuses) {
           updateFromPartialState({
             providers: {
-              chatgpt: { ...providers.chatgpt, status: msg.statuses.chatgpt.status },
-              claude: { ...providers.claude, status: msg.statuses.claude.status },
-              gemini: { ...providers.gemini, status: msg.statuses.gemini.status },
+              chatgpt: { ...providers.chatgpt, status: msg.statuses.chatgpt.status, isFresh: msg.statuses.chatgpt.isFresh },
+              claude: { ...providers.claude, status: msg.statuses.claude.status, isFresh: msg.statuses.claude.isFresh },
+              gemini: { ...providers.gemini, status: msg.statuses.gemini.status, isFresh: msg.statuses.gemini.isFresh },
             },
           });
         }
@@ -101,14 +120,20 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleOpenTab = (providerId: ProviderId) => {
+  const handleOpenTab = (providerId: ProviderId, forceNewChat: boolean = false) => {
     const urls: Record<ProviderId, string> = {
       chatgpt: 'https://chatgpt.com',
       claude: 'https://claude.ai/new',
       gemini: 'https://gemini.google.com/app',
     };
-    if (typeof chrome !== 'undefined' && chrome.tabs) {
-      chrome.tabs.create({ url: urls[providerId] });
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+      chrome.runtime.sendMessage({
+        type: 'OPEN_SINGLE_PROVIDER_TAB',
+        provider: providerId,
+        forceNewChat,
+      });
+    } else if (typeof chrome !== 'undefined' && chrome.tabs) {
+      chrome.tabs.create({ url: urls[providerId], active: false });
     } else {
       window.open(urls[providerId], '_blank');
     }
@@ -118,9 +143,9 @@ export const App: React.FC = () => {
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       chrome.runtime.sendMessage({ type: 'OPEN_PROVIDER_TABS', forceNewChat: true });
     } else {
-      handleOpenTab('chatgpt');
-      handleOpenTab('claude');
-      handleOpenTab('gemini');
+      handleOpenTab('chatgpt', true);
+      handleOpenTab('claude', true);
+      handleOpenTab('gemini', true);
     }
   };
 
@@ -172,31 +197,33 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Model Status Indicators */}
+          {/* Model Status Indicators - only in navbar when conversation is active */}
           <div className="flex items-center gap-2.5">
-            {hasUnavailableProviders && (
-              <button
-                onClick={handleOpenAllTabs}
-                title="Open new chat in all 3 AI tabs"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold rounded-xl border border-emerald-200 transition-colors shadow-xs cursor-pointer mr-1"
-              >
-                <Zap className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="hidden sm:inline">Open All (1-Click)</span>
-              </button>
-            )}
             {isConversationActive && (
-              <button
-                onClick={clearChat}
-                title="Start a new conversation"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 text-xs font-semibold rounded-xl border border-slate-200 transition-colors shadow-xs cursor-pointer mr-1"
-              >
-                <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="hidden sm:inline">New Chat</span>
-              </button>
+              <>
+                {hasUnavailableProviders && (
+                  <button
+                    onClick={handleOpenAllTabs}
+                    title="Open new chat in all 3 AI tabs"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold rounded-xl border border-emerald-200 transition-colors shadow-xs cursor-pointer mr-1"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="hidden sm:inline">Open All (1-Click)</span>
+                  </button>
+                )}
+                <button
+                  onClick={clearChat}
+                  title="Start a new conversation"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 text-xs font-semibold rounded-xl border border-slate-200 transition-colors shadow-xs cursor-pointer mr-1"
+                >
+                  <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="hidden sm:inline">New Chat</span>
+                </button>
+                <ProviderBadge provider={providers.chatgpt} onOpenTab={(fresh) => handleOpenTab('chatgpt', fresh)} variant="compact" />
+                <ProviderBadge provider={providers.claude} onOpenTab={(fresh) => handleOpenTab('claude', fresh)} variant="compact" />
+                <ProviderBadge provider={providers.gemini} onOpenTab={(fresh) => handleOpenTab('gemini', fresh)} variant="compact" />
+              </>
             )}
-            <ProviderBadge provider={providers.chatgpt} onOpenTab={() => handleOpenTab('chatgpt')} variant="compact" />
-            <ProviderBadge provider={providers.claude} onOpenTab={() => handleOpenTab('claude')} variant="compact" />
-            <ProviderBadge provider={providers.gemini} onOpenTab={() => handleOpenTab('gemini')} variant="compact" />
             <button
               onClick={checkStatus}
               title="Refresh Tab Status"
@@ -209,49 +236,61 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main Workspace Area - Fanned Out Across Widescreen */}
-      <main className="flex-1 p-6 md:px-10 lg:px-12 max-w-6xl w-full mx-auto flex flex-col justify-start space-y-8 pb-36">
+      <main className={`flex-1 px-6 md:px-10 lg:px-12 max-w-6xl w-full mx-auto flex flex-col justify-start ${isConversationActive ? 'space-y-8 pb-36 pt-6' : 'pb-16'}`}>
         {/* HERO IDLE STATE: Fanned Out, Balanced, Spacious */}
         {!isConversationActive && (
-          <div className="flex flex-col items-center justify-center my-auto py-6 md:py-10 space-y-8 w-full animate-fadeIn">
-            {/* Title & Header */}
-            <div className="text-center space-y-3 max-w-3xl mx-auto">
-              <div className="inline-flex items-center gap-2 px-3.5 py-1 bg-emerald-50 border border-emerald-200/80 rounded-full text-xs font-semibold text-emerald-800 shadow-xs">
-                <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> Multi-Model Parallel Intelligence
+          <div className="w-full flex flex-col animate-fadeIn">
+            {/* Initial 100vh Viewport Screen: Top Section + Blank Space + PromptInput docked to bottom */}
+            <div className="flex flex-col min-h-[calc(100vh-4.25rem)] justify-between pt-5 md:pt-8">
+              {/* Top Section: Title & AI Connection Cards */}
+              <div className="space-y-5 md:space-y-7 w-full">
+                {/* Title & Header */}
+                <div className="text-center space-y-2.5 max-w-3xl mx-auto">
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1 bg-emerald-50 border border-emerald-200/80 rounded-full text-xs font-semibold text-emerald-800 shadow-xs">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> Multi-Model Parallel Intelligence
+                  </div>
+                  <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 tracking-tight">
+                    AI Council Decision Workstation
+                  </h2>
+                  <p className="text-sm md:text-base text-slate-600 max-w-2xl mx-auto leading-relaxed">
+                    Query ChatGPT &amp; Claude simultaneously across your open tabs, then synthesize a consolidated, citation-backed verdict via Gemini.
+                  </p>
+                </div>
+
+                {/* Provider Connectivity Status Grid - Spans All 3 Columns */}
+                <div className="space-y-3 w-full">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5 lg:gap-6 w-full">
+                    <ProviderBadge provider={providers.chatgpt} onOpenTab={(fresh) => handleOpenTab('chatgpt', fresh)} variant="card" />
+                    <ProviderBadge provider={providers.claude} onOpenTab={(fresh) => handleOpenTab('claude', fresh)} variant="card" />
+                    <ProviderBadge provider={providers.gemini} onOpenTab={(fresh) => handleOpenTab('gemini', fresh)} variant="card" />
+                  </div>
+
+                  {hasUnavailableProviders && (
+                    <button
+                      type="button"
+                      onClick={handleOpenAllTabs}
+                      className="w-full py-2.5 px-5 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 hover:from-emerald-100 hover:to-teal-100 text-emerald-800 border border-emerald-200/80 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-xs hover:shadow-sm cursor-pointer"
+                    >
+                      <Zap className="w-4 h-4 text-emerald-600" />
+                      <span>Open All AI Tabs in Background (1-Click)</span>
+                    </button>
+                  )}
+                </div>
               </div>
-              <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 tracking-tight">
-                AI Council Decision Workstation
-              </h2>
-              <p className="text-sm md:text-base text-slate-600 max-w-2xl mx-auto leading-relaxed">
-                Query ChatGPT &amp; Claude simultaneously across your open tabs, then synthesize a consolidated, citation-backed verdict via Gemini.
-              </p>
+
+              {/* Generous blank space pushing the input field exactly to the bottom edge */}
+              <div className="flex-1 min-h-[36px]" />
+
+              {/* Top part of Unified White Card: Docked flush to the bottom edge of initial viewport */}
+              <div className="w-full bg-white border-t border-x border-slate-200/90 rounded-t-2xl p-5 md:p-6 shadow-sm">
+                <PromptInput onSubmitPrompt={handleStartRun} />
+              </div>
             </div>
 
-            {/* Provider Connectivity Status Grid - Spans All 3 Columns */}
-            <div className="space-y-3 w-full">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-5 lg:gap-6 w-full">
-                <ProviderBadge provider={providers.chatgpt} onOpenTab={() => handleOpenTab('chatgpt')} variant="card" />
-                <ProviderBadge provider={providers.claude} onOpenTab={() => handleOpenTab('claude')} variant="card" />
-                <ProviderBadge provider={providers.gemini} onOpenTab={() => handleOpenTab('gemini')} variant="card" />
-              </div>
-
-              {hasUnavailableProviders && (
-                <button
-                  onClick={handleOpenAllTabs}
-                  className="w-full py-3 px-5 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 hover:from-emerald-100 hover:to-teal-100 text-emerald-800 border border-emerald-200/80 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-xs hover:shadow-sm cursor-pointer"
-                >
-                  <Zap className="w-4 h-4 text-emerald-600" />
-                  <span>Open All AI Tabs (1-Click)</span>
-                </button>
-              )}
-            </div>
-
-            {/* Central Prominent Input Card - Wide, Spacious & Executive */}
-            <div className="w-full bg-white border border-slate-200/90 rounded-2xl p-6 md:p-8 shadow-sm space-y-5">
-              <PromptInput onSubmitPrompt={handleStartRun} />
-
-              {/* Fanned-Out Suggested Query Cards (Spans across all 3 columns) */}
-              <div className="pt-4 border-t border-slate-100 space-y-3">
-                <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-400">
+            {/* Bottom part of Unified White Card: Starts right at the divider, strictly below the initial fold */}
+            <div className="w-full bg-white border-b border-x border-slate-200/90 rounded-b-2xl shadow-sm mb-16 overflow-hidden">
+              <div className="p-5 md:p-6 pt-5 border-t border-slate-100 bg-slate-50/30 space-y-3.5">
+                <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-400 px-0.5">
                   <span>Suggested Council Inquiries</span>
                   <span className="text-[10px] font-normal normal-case text-slate-400">Click any card to load query</span>
                 </div>
@@ -263,10 +302,10 @@ export const App: React.FC = () => {
                         key={idx}
                         type="button"
                         onClick={() => setPrompt(sp.prompt)}
-                        className="group text-left p-4 rounded-xl bg-slate-50/80 hover:bg-emerald-50/50 border border-slate-200/80 hover:border-emerald-200 transition-all duration-200 shadow-xs hover:shadow-sm flex flex-col justify-between cursor-pointer space-y-2.5"
+                        className="group text-left p-4 rounded-xl bg-white hover:bg-emerald-50/50 border border-slate-200/80 hover:border-emerald-200 transition-all duration-200 shadow-xs hover:shadow-sm flex flex-col justify-between cursor-pointer space-y-2.5"
                       >
                         <div className="flex items-center justify-between w-full">
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600 group-hover:text-emerald-700 group-hover:border-emerald-200 transition-colors">
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-slate-50 border border-slate-200 text-slate-600 group-hover:text-emerald-700 group-hover:border-emerald-200 transition-colors">
                             <IconComp className="w-3 h-3 text-emerald-600" />
                             {sp.category}
                           </span>

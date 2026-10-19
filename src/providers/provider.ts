@@ -13,6 +13,7 @@ export interface AIProvider {
   isReady(): Promise<boolean>;
   sendPrompt(prompt: string): Promise<void>;
   waitForCompletion(options?: WaitOptions): Promise<void>;
+  answerQuestion?(answer: string, optionIndex?: number): Promise<void>;
   getLatestResponse(): Promise<ModelResponse>;
   getStatus(): Promise<ProviderStatus>;
 }

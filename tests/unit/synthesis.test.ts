@@ -85,4 +85,28 @@ Arc 11 Play is the optimal choice.
     expect(parsed.consolidatedAnswer).toContain('Arc 11 Play is the optimal choice');
     expect(parsed.verdict).toContain('Arc 11 Play is the optimal choice');
   });
+
+  it('should not clip consolidated answer when conversational words like why or consensus appear in sentences', () => {
+    const rawMarkdown = `
+## CONSOLIDATED_RESPONSE
+Here is the full consolidated answer. The main reason why this model works best is its balance. Reaching a consensus among team members is easy with this choice. The ultimate verdict on durability is positive. All this text must remain intact without clipping.
+
+## VERDICT
+Choose this model with confidence.
+
+## CONSENSUS
+- Clear winner for reliability.
+
+## WHY
+- Tested durability under load.
+`;
+
+    const parsed = parseSynthesisMarkdown(rawMarkdown);
+    expect(parsed.consolidatedAnswer).toContain('The main reason why this model works best');
+    expect(parsed.consolidatedAnswer).toContain('Reaching a consensus among team members');
+    expect(parsed.consolidatedAnswer).toContain('The ultimate verdict on durability');
+    expect(parsed.consolidatedAnswer).toContain('All this text must remain intact without clipping.');
+    expect(parsed.verdict).toContain('Choose this model with confidence.');
+    expect(parsed.why[0]).toContain('Tested durability under load.');
+  });
 });

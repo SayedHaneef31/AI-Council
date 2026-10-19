@@ -16,10 +16,15 @@ export function parseSynthesisMarkdown(rawMarkdown: string): CouncilSynthesis {
 
   if (!cleanText) return synthesis;
 
-  // Regex matching CONSOLIDATED_RESPONSE, VERDICT, CONSENSUS, DISAGREEMENT, WHY, CONFIDENCE anywhere in text
+  // Regex matching section headers strictly at the start of a line or document:
+  // e.g. "## CONSOLIDATED_RESPONSE", "## VERDICT", "**CONSENSUS:**", "## WHY"
+  // Never matches words within a sentence (e.g. "reason why", "verdict on", "consensus was")
   const keywordPattern =
     'CONSOLIDATED_RESPONSE|CONSOLIDATED RESPONSE|CONSOLIDATED ANSWER|CONSOLIDATED|VERDICT|CONSENSUS|DISAGREEMENT|DISAGREEMENTS|WHY|CONFIDENCE';
-  const keywordRegex = new RegExp(`(?:^|\\n|\\s|#{1,4}\\s*|\\*{2})(${keywordPattern})(?:[:\\s*#]+|\\*{2})`, 'gi');
+  const keywordRegex = new RegExp(
+    `(?:^|\\n)\\s*(?:#{1,6}\\s*|\\*{2}\\s*|\\d+[.)]\\s*)?(${keywordPattern})(?:\\*{2})?\\s*(?:[:—–-]\\s*|\\n|$)`,
+    'gi'
+  );
 
   const matches: { keyword: string; index: number; endHeaderIndex: number }[] = [];
   let match: RegExpExecArray | null;

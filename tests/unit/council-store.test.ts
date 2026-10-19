@@ -70,4 +70,37 @@ describe('Council Store', () => {
     expect(useCouncilStore.getState().turns.length).toBe(0);
     expect(useCouncilStore.getState().runStatus).toBe('idle');
   });
+
+  it('should handle mid-chat provider questions and answering', () => {
+    useCouncilStore.getState().startTurn('Evaluate frameworks');
+
+    // Simulate provider asking a question mid-chat
+    useCouncilStore.getState().updateFromPartialState({
+      providers: {
+        chatgpt: {
+          id: 'chatgpt',
+          name: 'ChatGPT',
+          status: 'awaiting_input',
+          pendingQuestion: {
+            provider: 'chatgpt',
+            question: 'Which framework do you prefer?',
+            options: ['Next.js', 'Vite'],
+            timestamp: Date.now(),
+          },
+        },
+      },
+    });
+
+    const stateWithQuestion = useCouncilStore.getState();
+    expect(stateWithQuestion.providers.chatgpt.status).toBe('awaiting_input');
+    expect(stateWithQuestion.providers.chatgpt.pendingQuestion?.question).toBe('Which framework do you prefer?');
+    expect(stateWithQuestion.turns[0].pendingQuestions?.chatgpt?.options).toContain('Next.js');
+
+    // Answer the question
+    useCouncilStore.getState().answerProviderQuestion('chatgpt', 'Next.js', 0);
+
+    const stateAfterAnswer = useCouncilStore.getState();
+    expect(stateAfterAnswer.providers.chatgpt.status).toBe('generating');
+    expect(stateAfterAnswer.providers.chatgpt.pendingQuestion).toBeUndefined();
+  });
 });

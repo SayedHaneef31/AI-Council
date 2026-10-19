@@ -19,17 +19,53 @@ const PROVIDER_NEW_CHAT_URLS: Record<ProviderId, string> = {
   gemini: 'https://gemini.google.com/app',
 };
 
+const freshlyResetTabs = new Set<ProviderId>();
+
+function isTabFreshChat(url: string | undefined, provider: ProviderId): boolean {
+  if (!url) return true;
+  const lower = url.toLowerCase().split('?')[0].split('#')[0];
+
+  switch (provider) {
+    case 'chatgpt':
+      // chatgpt.com/c/xxx is an ongoing thread
+      return !lower.includes('/c/');
+    case 'claude':
+      // claude.ai/chat/xxx is an ongoing thread
+      return !lower.includes('/chat/');
+    case 'gemini': {
+      // gemini.google.com/app/<id> is an ongoing thread
+      const match = lower.match(/gemini\.google\.com\/app\/([a-zA-Z0-9_-]{4,})/);
+      return !match;
+    }
+    default:
+      return true;
+  }
+}
+
 async function openProviderTabs(forceNewChat = false): Promise<void> {
   const providers: ProviderId[] = ['chatgpt', 'claude', 'gemini'];
   for (const p of providers) {
+    freshlyResetTabs.add(p);
     const existingTab = await findProviderTab(p);
     if (!existingTab) {
       // Create new tab in background so it doesn't snatch focus from the extension
       chrome.tabs.create({ url: PROVIDER_NEW_CHAT_URLS[p], active: false });
     } else if (forceNewChat && existingTab.id) {
-      // Navigate existing tab to fresh new chat URL
+      // Navigate existing tab to fresh new chat URL without activating it
       chrome.tabs.update(existingTab.id, { url: PROVIDER_NEW_CHAT_URLS[p] });
     }
+  }
+}
+
+async function openSingleProviderTab(provider: ProviderId, forceNewChat = false): Promise<void> {
+  freshlyResetTabs.add(provider);
+  const existingTab = await findProviderTab(provider);
+  if (!existingTab || !existingTab.id) {
+    // Open new tab in background so user remains in AI Council
+    chrome.tabs.create({ url: PROVIDER_NEW_CHAT_URLS[provider], active: false });
+  } else if (forceNewChat) {
+    // Navigate existing tab to fresh new chat URL without activating it
+    chrome.tabs.update(existingTab.id, { url: PROVIDER_NEW_CHAT_URLS[provider] });
   }
 }
 
@@ -104,9 +140,9 @@ async function ensureContentScriptInjected(tabId: number, provider: ProviderId):
   }
 }
 
-async function getProviderStatuses(): Promise<Record<ProviderId, { status: ProviderStatus; tabId?: number }>> {
+async function getProviderStatuses(): Promise<Record<ProviderId, { status: ProviderStatus; tabId?: number; isFresh?: boolean }>> {
   const providers: ProviderId[] = ['chatgpt', 'claude', 'gemini'];
-  const results: Record<ProviderId, { status: ProviderStatus; tabId?: number }> = {
+  const results: Record<ProviderId, { status: ProviderStatus; tabId?: number; isFresh?: boolean }> = {
     chatgpt: { status: 'unavailable' },
     claude: { status: 'unavailable' },
     gemini: { status: 'unavailable' },
@@ -117,12 +153,16 @@ async function getProviderStatuses(): Promise<Record<ProviderId, { status: Provi
       const tab = await findProviderTab(p);
       if (!tab || !tab.id) {
         results[p] = { status: 'unavailable' };
+        freshlyResetTabs.delete(p);
         continue;
       }
 
+      const urlIsFresh = isTabFreshChat(tab.url, p);
+      const isFresh = freshlyResetTabs.has(p) || urlIsFresh;
+
       // If the tab is still loading HTML/assets in Chrome, it's not ready yet
       if (tab.status === 'loading') {
-        results[p] = { status: 'connecting', tabId: tab.id };
+        results[p] = { status: 'connecting', tabId: tab.id, isFresh };
         continue;
       }
 
@@ -139,8 +179,8 @@ async function getProviderStatuses(): Promise<Record<ProviderId, { status: Provi
         });
       });
 
-      if (statusFromTab === 'ready' || statusFromTab === 'generating') {
-        results[p] = { status: statusFromTab, tabId };
+      if (statusFromTab === 'ready' || statusFromTab === 'generating' || statusFromTab === 'awaiting_input') {
+        results[p] = { status: statusFromTab, tabId, isFresh };
       } else {
         // Ensure content script is injected if not already
         const injected = await ensureContentScriptInjected(tabId, p);
@@ -155,11 +195,12 @@ async function getProviderStatuses(): Promise<Record<ProviderId, { status: Provi
             });
           });
           results[p] = {
-            status: (retryStatus === 'ready' || retryStatus === 'generating') ? retryStatus : 'connecting',
+            status: (retryStatus === 'ready' || retryStatus === 'generating' || retryStatus === 'awaiting_input') ? retryStatus : 'connecting',
             tabId,
+            isFresh,
           };
         } else {
-          results[p] = { status: 'connecting', tabId };
+          results[p] = { status: 'connecting', tabId, isFresh };
         }
       }
     } catch (e) {
@@ -204,8 +245,26 @@ async function runWorkerProvider(
 ): Promise<ModelResponse> {
   await ensureContentScriptInjected(tabId, provider);
 
+  if (provider === 'gemini') {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: () => {
+          try {
+            Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+            Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+            document.hasFocus = () => true;
+            document.dispatchEvent(new Event('visibilitychange'));
+            window.dispatchEvent(new Event('focus'));
+          } catch (_e) {}
+        },
+      });
+    } catch (_e) {}
+  }
+
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    let timer = setTimeout(() => {
       reject(new Error(`${provider} timed out after ${timeoutMs / 1000}s`));
     }, timeoutMs);
 
@@ -227,7 +286,13 @@ async function runWorkerProvider(
 
     const listener = (msg: ExtensionMessage) => {
       if ('provider' in msg && msg.provider === provider) {
-        if (msg.type === 'PROVIDER_RESPONSE') {
+        if (msg.type === 'PROVIDER_QUESTION_ASKED') {
+          // Extend timer so user has ample time to answer question
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            reject(new Error(`${provider} timed out waiting for clarification answer`));
+          }, 180000);
+        } else if (msg.type === 'PROVIDER_RESPONSE') {
           clearTimeout(timer);
           chrome.runtime.onMessage.removeListener(listener);
           resolve(msg.response);
@@ -264,6 +329,14 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     return true;
   }
 
+  if (message.type === 'OPEN_SINGLE_PROVIDER_TAB') {
+    openSingleProviderTab(message.provider, message.forceNewChat ?? false).then(() => {
+      broadcastStatusUpdate();
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+
   if (message.type === 'PROVIDER_STREAM_UPDATE') {
     if (activeRun) {
       activeRun.streamingResponses[message.provider] = message.text;
@@ -279,6 +352,52 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     return false;
   }
 
+  if (message.type === 'PROVIDER_QUESTION_ASKED') {
+    chrome.runtime.sendMessage({
+      type: 'COUNCIL_STATE_UPDATE',
+      state: {
+        providers: {
+          [message.provider]: {
+            status: 'awaiting_input',
+            pendingQuestion: {
+              provider: message.provider,
+              question: message.question,
+              options: message.options,
+              timestamp: Date.now(),
+            },
+          },
+        },
+      },
+    }).catch(() => {});
+    return false;
+  }
+
+  if (message.type === 'ANSWER_PROVIDER_QUESTION') {
+    (async () => {
+      const tab = await findProviderTab(message.provider);
+      if (tab && tab.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'ANSWER_PROVIDER_QUESTION',
+          provider: message.provider,
+          answer: message.answer,
+          optionIndex: message.optionIndex,
+        });
+        chrome.runtime.sendMessage({
+          type: 'COUNCIL_STATE_UPDATE',
+          state: {
+            providers: {
+              [message.provider]: {
+                status: 'generating',
+                pendingQuestion: undefined,
+              },
+            },
+          },
+        }).catch(() => {});
+      }
+    })();
+    return true;
+  }
+
   if (message.type === 'START_COUNCIL_RUN') {
     (async () => {
       const { prompt, context } = message;
@@ -292,9 +411,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
           runStatus: 'running',
           streamingResponses: {},
           providers: {
-            chatgpt: { status: tabStatuses.chatgpt.tabId ? 'sending' : 'unavailable' },
-            claude: { status: tabStatuses.claude.tabId ? 'sending' : 'unavailable' },
-            gemini: { status: tabStatuses.gemini.tabId ? 'ready' : 'unavailable' },
+            chatgpt: { status: tabStatuses.chatgpt.tabId ? 'sending' : 'unavailable', response: undefined },
+            claude: { status: tabStatuses.claude.tabId ? 'sending' : 'unavailable', response: undefined },
+            gemini: { status: tabStatuses.gemini.tabId ? 'ready' : 'unavailable', response: undefined },
           },
         },
       });
@@ -402,7 +521,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
               error: activeRun.errors.claude,
               response: activeRun.responses.claude,
             },
-            gemini: { status: 'sending' },
+            gemini: { status: 'sending', response: undefined },
           },
         },
       });
@@ -410,27 +529,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       if (tabStatuses.gemini.tabId) {
         try {
           const synthesisPrompt = buildSynthesisPrompt(prompt, context || '', collectedResponses);
-
-          // Ensure Gemini tab receives active rendering and input dispatch in Chrome
-          const [currentActiveTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          const needTabWakeup = currentActiveTab && currentActiveTab.id !== tabStatuses.gemini.tabId;
-
-          if (needTabWakeup && tabStatuses.gemini.tabId) {
-            await chrome.tabs.update(tabStatuses.gemini.tabId, { active: true });
-            await new Promise((r) => setTimeout(r, 250));
-          }
-
-          const geminiPromise = runWorkerProvider('gemini', tabStatuses.gemini.tabId, synthesisPrompt, 120000);
-
-          if (needTabWakeup && currentActiveTab && currentActiveTab.id) {
-            setTimeout(async () => {
-              try {
-                await chrome.tabs.update(currentActiveTab.id!, { active: true });
-              } catch (_e) {}
-            }, 600);
-          }
-
-          const geminiResponse = await geminiPromise;
+          const geminiResponse = await runWorkerProvider('gemini', tabStatuses.gemini.tabId, synthesisPrompt, 120000);
           activeRun.responses.gemini = geminiResponse;
 
           const synthesis = parseSynthesisMarkdown(geminiResponse.text);
